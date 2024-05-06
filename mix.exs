@@ -64,7 +64,7 @@ defmodule Astarte.DataAccess.Mixfile do
 
   defp astarte_required_modules(_) do
     [
-      {:astarte_core, github: "astarte-platform/astarte_core"}
+      {:astarte_core, github: "noaccOS/astarte_core", ref: "refactor/standard-ecto-functions-bangs"}
     ]
   end
 

@@ -55,7 +55,7 @@ defmodule Astarte.DataAccess.Mappings do
         else: query |> select(^@default_selection)
 
     Repo.all(query, consistency: :quorum)
-    |> Enum.map(&mapping_from_endpoint/1)
+    |> Enum.map(&Mapping.from_db_result!/1)
     |> case do
       [] -> {:error, :interface_not_found}
       mappings -> {:ok, mappings}
@@ -71,42 +71,5 @@ defmodule Astarte.DataAccess.Mappings do
 
       {:ok, mappings_map}
     end
-  end
-
-  defp mapping_from_endpoint(endpoint) do
-    %Endpoint{
-      endpoint: endpoint,
-      value_type: value_type,
-      reliability: reliability,
-      retention: retention,
-      expiry: expiry,
-      database_retention_policy: database_retention_policy,
-      database_retention_ttl: database_retention_ttl,
-      allow_unset: allow_unset,
-      explicit_timestamp: explicit_timestamp,
-      endpoint_id: endpoint_id,
-      interface_id: interface_id,
-      doc: doc,
-      description: description
-    } = endpoint
-
-    # If nil, treat as no_ttl
-    database_retention_policy = database_retention_policy || :no_ttl
-
-    %Mapping{
-      endpoint: endpoint,
-      value_type: value_type,
-      reliability: reliability,
-      retention: retention,
-      expiry: expiry,
-      database_retention_policy: database_retention_policy,
-      database_retention_ttl: database_retention_ttl,
-      allow_unset: allow_unset,
-      explicit_timestamp: explicit_timestamp,
-      endpoint_id: endpoint_id,
-      interface_id: interface_id,
-      doc: doc,
-      description: description
-    }
   end
 end

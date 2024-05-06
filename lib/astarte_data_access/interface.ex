@@ -60,7 +60,7 @@ defmodule Astarte.DataAccess.Interface do
           {:ok, %InterfaceDescriptor{}} | {:error, atom}
   def fetch_interface_descriptor(realm_name, interface_name, major_version) do
     with {:ok, interface} <- retrieve_interface_row(realm_name, interface_name, major_version) do
-      {:ok, interface_descriptor_from_interface(interface)}
+      {:ok, InterfaceDescriptor.from_db_result!(interface)}
     end
   end
 
@@ -78,36 +78,5 @@ defmodule Astarte.DataAccess.Interface do
       1 -> :ok
       0 -> {:error, :interface_not_found}
     end
-  end
-
-  defp interface_descriptor_from_interface(interface) do
-    %Interface{
-      name: name,
-      major_version: major_version,
-      minor_version: minor_version,
-      type: type,
-      ownership: ownership,
-      aggregation: aggregation,
-      automaton_accepting_states: automaton_accepting_states,
-      automaton_transitions: automaton_transitions,
-      storage: storage,
-      storage_type: storage_type,
-      interface_id: interface_id
-    } = interface
-
-    %InterfaceDescriptor{
-      name: name,
-      major_version: major_version,
-      minor_version: minor_version,
-      type: type,
-      ownership: ownership,
-      aggregation: aggregation,
-      storage: storage,
-      storage_type: storage_type,
-      automaton:
-        {:erlang.binary_to_term(automaton_transitions),
-         :erlang.binary_to_term(automaton_accepting_states)},
-      interface_id: interface_id
-    }
   end
 end
