@@ -30,8 +30,8 @@ defmodule Astarte.DataAccess.Realms.Device do
     :cert_serial,
     :connected,
     :credentials_secret,
-    # :exchanged_bytes_by_interface,
-    # :exchanged_msgs_by_interface,
+    :exchanged_bytes_by_interface,
+    :exchanged_msgs_by_interface,
     :first_credentials_request,
     :first_registration,
     :groups,
@@ -39,10 +39,10 @@ defmodule Astarte.DataAccess.Realms.Device do
     :introspection,
     :introspection_minor,
     :last_connection,
-    # :last_credentials_request_ip,
+    :last_credentials_request_ip,
     :last_disconnection,
-    # :last_seen_ip,
-    # :old_introspection,
+    :last_seen_ip,
+    :old_introspection,
     :pending_empty_cache,
     :protocol_revision,
     :total_received_bytes,
@@ -59,8 +59,17 @@ defmodule Astarte.DataAccess.Realms.Device do
     field :cert_serial, :string
     field :connected, :boolean
     field :credentials_secret, :string
-    # exchanged_bytes_by_interface map<frozen<tuple<ascii, int>>, bigint>,
-    # exchanged_msgs_by_interface map<frozen<tuple<ascii, int>>, bigint>,
+
+    field :exchanged_bytes_by_interface, Exandra.Map,
+      key: Exandra.Tuple,
+      types: [:string, :integer],
+      value: :integer
+
+    field :exchanged_msgs_by_interface, Exandra.Map,
+      key: Exandra.Tuple,
+      types: [:string, :integer],
+      value: :integer
+
     field :first_credentials_request, :utc_datetime_usec
     field :first_registration, :utc_datetime_usec
     field :groups, Exandra.Map, key: :string, value: Ecto.UUID
@@ -68,10 +77,19 @@ defmodule Astarte.DataAccess.Realms.Device do
     field :introspection, Exandra.Map, key: :string, value: :integer
     field :introspection_minor, Exandra.Map, key: :string, value: :integer
     field :last_connection, :utc_datetime_usec
-    # field :last_credentials_request_ip, inet
+
+    field :last_credentials_request_ip, Exandra.Tuple,
+      types: [:integer, :integer, :integer, :integer]
+
     field :last_disconnection, :utc_datetime_usec
-    # field :last_seen_ip, inet
-    # old_introspection map<frozen<tuple<ascii, int>>, int>,
+    field :last_seen_ip, Exandra.Tuple, types: [:integer, :integer, :integer, :integer]
+
+    field :old_introspection,
+          Exandra.Map,
+          key: Exandra.Tuple,
+          types: [:string, :integer],
+          value: :integer
+
     field :pending_empty_cache, :boolean
     field :protocol_revision, :integer
     field :total_received_bytes, :integer
@@ -117,7 +135,7 @@ defmodule Astarte.DataAccess.Realms.Device do
 
     put_change(changeset, :encoded_device_id, encoded_device_id)
   end
-  
+
   defp validate_encoded_id(changeset, device_id, encoded_id) do
     case Device.decode_device_id(encoded_id) do
       {:ok, ^device_id} ->

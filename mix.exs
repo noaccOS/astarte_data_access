@@ -64,7 +64,8 @@ defmodule Astarte.DataAccess.Mixfile do
 
   defp astarte_required_modules(_) do
     [
-      {:astarte_core, github: "noaccOS/astarte_core", ref: "refactor/standard-ecto-functions-bangs"}
+      {:astarte_core,
+       github: "noaccOS/astarte_core", ref: "refactor/standard-ecto-functions-bangs"}
     ]
   end
 
@@ -73,7 +74,7 @@ defmodule Astarte.DataAccess.Mixfile do
     [
       {:xandra, "~> 0.18"},
       {:cqex, "~> 1.0"},
-      {:exandra, "~> 0.10"},
+      {:exandra, github: "noaccOS/exandra"},
       {:skogsra, "~> 2.2"},
       {:excoveralls, "~> 0.15", only: :test},
       {:castore, "~> 1.0.0"},
