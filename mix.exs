@@ -1,7 +1,7 @@
 #
 # This file is part of Astarte.
 #
-# Copyright 2017-2022 Ispirata Srl
+# Copyright 2017-2024 Ispirata Srl
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -71,7 +71,9 @@ defmodule Astarte.DataAccess.Mixfile do
   # Run "mix help deps" to learn about dependencies.
   defp deps do
     [
-      {:xandra, "~> 0.11"},
+      # TODO: remove once solved https://github.com/vinniefranco/exandra/issues/68
+      {:ecto_sql, "~> 3.11.0"},
+      {:exandra, github: "vinniefranco/exandra"},
       {:cqex, "~> 1.0"},
       {:skogsra, "~> 2.2"},
       {:excoveralls, "~> 0.15", only: :test},
