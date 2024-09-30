@@ -8,5 +8,3 @@ config :cqerl,
 
 config :astarte_data_access,
   xandra_nodes: "#{cassandra_host}:#{cassandra_port}"
-
-config :astarte_data_access, Astarte.DataAccess.Repo, keyspace: ""
