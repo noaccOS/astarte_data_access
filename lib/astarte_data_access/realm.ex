@@ -360,7 +360,7 @@ defmodule Astarte.DataAccess.Realm do
   end
 
   defp execute_realm_deletion(conn, keyspace_name, astarte_keyspace_name, realm_name) do
-    with :ok <- delete_realm_keyspace(conn, keyspace_name),
+    with :ok <- delete_realm_keyspace(keyspace_name),
          :ok <- remove_realm(conn, astarte_keyspace_name, realm_name) do
       :ok
     end
@@ -393,12 +393,12 @@ defmodule Astarte.DataAccess.Realm do
     end
   end
 
-  defp delete_realm_keyspace(conn, keyspace_name) do
+  defp delete_realm_keyspace(keyspace_name) do
     query = """
     DROP KEYSPACE #{keyspace_name}
     """
 
-    with {:ok, %Xandra.SchemaChange{}} <- CSystem.execute_schema_change(conn, query) do
+    with {:ok, _} <- CSystem.execute_schema_change(query) do
       :ok
     end
   end
@@ -413,7 +413,7 @@ defmodule Astarte.DataAccess.Realm do
       durable_writes = true
     """
 
-    with {:ok, %Xandra.SchemaChange{}} <- CSystem.execute_schema_change(conn, query) do
+    with {:ok, _} <- CSystem.execute_schema_change(query) do
       :ok
     end
   end
@@ -428,7 +428,7 @@ defmodule Astarte.DataAccess.Realm do
     )
     """
 
-    with {:ok, %Xandra.SchemaChange{}} <- CSystem.execute_schema_change(conn, query) do
+    with {:ok, _} <- CSystem.execute_schema_change(query) do
       :ok
     end
   end
@@ -443,7 +443,7 @@ defmodule Astarte.DataAccess.Realm do
     )
     """
 
-    with {:ok, %Xandra.SchemaChange{}} <- CSystem.execute_schema_change(conn, query) do
+    with {:ok, _} <- CSystem.execute_schema_change(query) do
       :ok
     end
   end
@@ -481,7 +481,7 @@ defmodule Astarte.DataAccess.Realm do
     )
     """
 
-    with {:ok, %Xandra.SchemaChange{}} <- CSystem.execute_schema_change(conn, query) do
+    with {:ok, _} <- CSystem.execute_schema_change(query) do
       :ok
     end
   end
@@ -511,7 +511,7 @@ defmodule Astarte.DataAccess.Realm do
     )
     """
 
-    with {:ok, %Xandra.SchemaChange{}} <- CSystem.execute_schema_change(conn, query) do
+    with {:ok, _} <- CSystem.execute_schema_change(query) do
       :ok
     end
   end
@@ -537,7 +537,7 @@ defmodule Astarte.DataAccess.Realm do
     )
     """
 
-    with {:ok, %Xandra.SchemaChange{}} <- CSystem.execute_schema_change(conn, query) do
+    with {:ok, _} <- CSystem.execute_schema_change(query) do
       :ok
     end
   end
@@ -571,7 +571,7 @@ defmodule Astarte.DataAccess.Realm do
     )
     """
 
-    with {:ok, %Xandra.SchemaChange{}} <- CSystem.execute_schema_change(conn, query) do
+    with {:ok, _} <- CSystem.execute_schema_change(query) do
       :ok
     end
   end
@@ -590,7 +590,7 @@ defmodule Astarte.DataAccess.Realm do
     )
     """
 
-    with {:ok, %Xandra.SchemaChange{}} <- CSystem.execute_schema_change(conn, query) do
+    with {:ok, _} <- CSystem.execute_schema_change(query) do
       :ok
     end
   end
@@ -607,7 +607,7 @@ defmodule Astarte.DataAccess.Realm do
     )
     """
 
-    with {:ok, %Xandra.SchemaChange{}} <- CSystem.execute_schema_change(conn, query) do
+    with {:ok, _} <- CSystem.execute_schema_change(query) do
       :ok
     end
   end
@@ -623,7 +623,7 @@ defmodule Astarte.DataAccess.Realm do
     )
     """
 
-    with {:ok, %Xandra.SchemaChange{}} <- CSystem.execute_schema_change(conn, query) do
+    with {:ok, _} <- CSystem.execute_schema_change(query) do
       :ok
     end
   end
