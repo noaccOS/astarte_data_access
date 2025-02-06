@@ -19,8 +19,13 @@
 defmodule Astarte.DataAccess.Realm do
   require Logger
 
+  alias Astarte.DataAccess.Astarte.KvStore
+  alias Astarte.DataAccess.Astarte.Realm
   alias Astarte.DataAccess.CSystem
+  alias Astarte.DataAccess.Repo
   alias Astarte.DataAccess.XandraUtils
+
+  import Ecto.Query
 
   @default_realm_schema_version 10
   @default_replication_factor 1
@@ -33,27 +38,27 @@ defmodule Astarte.DataAccess.Realm do
         device_registration_limit \\ nil,
         realm_schema_version \\ @default_realm_schema_version
       ) do
-    case XandraUtils.run(realm_name, fn conn, keyspace_name ->
-           astarte_keyspace_name = XandraUtils.build_keyspace_name!("astarte")
+    keyspace = Realm.keyspace_name(realm_name)
+    astarte_keyspace = Realm.keyspace_name("astarte")
 
-           with :ok <- check_replication(conn, replication),
-                {:ok, replication_map_str} <- build_replication_map_str(replication) do
-             do_create_realm(
-               conn,
-               keyspace_name,
-               astarte_keyspace_name,
-               realm_name,
-               public_key_pem,
-               replication_map_str,
-               max_retention,
-               device_registration_limit,
-               realm_schema_version
-             )
-           end
-         end) do
-      :ok ->
-        :ok
-
+    with :ok <- check_replication(replication),
+         {:ok, replication_map} <- build_replication_map_str(replication),
+         :ok <- create_realm_keyspace(keyspace, replication_map),
+         :ok <- create_realm_kv_store(keyspace),
+         :ok <- create_names_table(keyspace),
+         :ok <- create_devices_table(keyspace),
+         :ok <- create_endpoints_table(keyspace),
+         :ok <- create_interfaces_table(keyspace),
+         :ok <- create_individual_properties_table(keyspace),
+         :ok <- create_simple_triggers_table(keyspace),
+         :ok <- create_grouped_devices_table(keyspace),
+         :ok <- create_deletion_in_progress_table(keyspace),
+         :ok <- insert_realm_public_key(keyspace, public_key_pem),
+         :ok <- insert_realm_astarte_schema_version(keyspace, realm_schema_version),
+         {:ok, _} <- insert_realm(astarte_keyspace, realm_name, device_registration_limit),
+         :ok <- insert_datastream_max_retention(keyspace, max_retention) do
+      :ok
+    else
       {:error, reason} ->
         Logger.warning("Cannot create realm: #{inspect(reason)}.",
           tag: "realm_creation_failed",
@@ -142,36 +147,6 @@ defmodule Astarte.DataAccess.Realm do
     end
   end
 
-  defp do_create_realm(
-         conn,
-         keyspace_name,
-         astarte_keyspace_name,
-         realm_name,
-         public_key_pem,
-         replication_map_str,
-         max_retention,
-         device_registration_limit,
-         realm_schema_version
-       ) do
-    with :ok <- create_realm_keyspace(conn, keyspace_name, replication_map_str),
-         :ok <- create_realm_kv_store(conn, keyspace_name),
-         :ok <- create_names_table(conn, keyspace_name),
-         :ok <- create_devices_table(conn, keyspace_name),
-         :ok <- create_endpoints_table(conn, keyspace_name),
-         :ok <- create_interfaces_table(conn, keyspace_name),
-         :ok <- create_individual_properties_table(conn, keyspace_name),
-         :ok <- create_simple_triggers_table(conn, keyspace_name),
-         :ok <- create_grouped_devices_table(conn, keyspace_name),
-         :ok <- create_deletion_in_progress_table(conn, keyspace_name),
-         :ok <- insert_realm_public_key(conn, keyspace_name, public_key_pem),
-         :ok <- insert_realm_astarte_schema_version(conn, keyspace_name, realm_schema_version),
-         :ok <-
-           insert_realm(conn, astarte_keyspace_name, realm_name, device_registration_limit),
-         :ok <- insert_datastream_max_retention(conn, keyspace_name, max_retention) do
-      :ok
-    end
-  end
-
   defp do_list_realms(conn, astarte_keyspace_name) do
     query = """
     SELECT
@@ -240,82 +215,77 @@ defmodule Astarte.DataAccess.Realm do
   end
 
   # Replication factor of 1 is always ok
-  def check_replication(_conn, 1), do: :ok
+  def check_replication(1), do: :ok
 
   # If replication factor is an integer, we're using SimpleStrategy
   # Check that the replication factor is <= the number of nodes in the same datacenter
-  def check_replication(conn, replication_factor)
+  def check_replication(replication_factor)
       when is_integer(replication_factor) and replication_factor > 1 do
-    with {:ok, local_datacenter} <- get_local_datacenter(conn) do
-      check_replication_for_datacenter(conn, local_datacenter, replication_factor, local: true)
-    end
+    local_datacenter =
+      from(l in "local", select: l.data_center)
+      |> Repo.one!(prefix: "system")
+
+    local_datacenter_node_count =
+      from(p in "peers",
+        prefix: "system",
+        hints: ["ALLOW FILTERING"],
+        where: p.data_center == ^local_datacenter
+      )
+      |> Repo.aggregate(:count)
+
+    # +1 because the local datacenter is not counted
+    node_count_by_datacenter = %{local_datacenter => local_datacenter_node_count + 1}
+
+    check_replication_factor(node_count_by_datacenter, local_datacenter, replication_factor)
   end
 
-  def check_replication(conn, datacenter_replication_factors)
+  def check_replication(datacenter_replication_factors)
       when is_map(datacenter_replication_factors) do
-    with {:ok, local_datacenter} <- get_local_datacenter(conn) do
-      Enum.reduce_while(datacenter_replication_factors, :ok, fn
-        {datacenter, replication_factor}, _acc ->
-          opts =
-            if datacenter == local_datacenter do
-              [local: true]
-            else
-              []
-            end
+    node_count_by_datacenter = node_count_by_datacenter()
 
-          case check_replication_for_datacenter(conn, datacenter, replication_factor, opts) do
-            :ok -> {:cont, :ok}
-            {:error, reason} -> {:halt, {:error, reason}}
-          end
-      end)
-    end
+    datacenter_replication_factors
+    |> Stream.map(fn {data_center, replication_factor} ->
+      check_replication_factor(node_count_by_datacenter, data_center, replication_factor)
+    end)
+    |> Enum.find(:ok, &(&1 != :ok))
   end
 
-  defp check_replication_for_datacenter(conn, data_center, replication_factor, opts) do
-    query = """
-    SELECT
-      COUNT(*)
-    FROM
-      system.peers
-    WHERE
-      data_center = :data_center
-    ALLOW FILTERING
-    """
+  defp node_count_by_datacenter do
+    local_datacenter =
+      from(l in "local", select: l.data_center)
+      |> Repo.one!(prefix: "system")
 
-    params = %{
-      data_center: data_center
-    }
+    from(p in "peers", prefix: "system", select: p.data_center)
+    |> Repo.all()
+    |> Enum.frequencies()
+    |> Map.update(local_datacenter, 1, &(&1 + 1))
+  end
 
-    with {:ok, page} <- XandraUtils.retrieve_page(conn, query, params, consistency: :quorum),
-         {:ok, %{count: dc_node_count}} <- Enum.fetch(page, 0) do
-      # If we're querying the datacenter of the local node, add 1 (itself) to the count
-      actual_node_count = if opts[:local], do: dc_node_count + 1, else: dc_node_count
-
-      if replication_factor <= actual_node_count do
+  defp check_replication_factor(node_count_by_datacenter, data_center, replication_factor) do
+    case Map.fetch(node_count_by_datacenter, data_center) do
+      {:ok, node_count} when node_count >= replication_factor ->
         :ok
-      else
-        _ =
-          Logger.warning(
-            "Trying to set replication_factor #{replication_factor} " <>
-              "in data_center #{data_center} that has #{actual_node_count} nodes.",
-            tag: "invalid_replication_factor",
-            data_center: data_center,
-            replication_factor: replication_factor
-          )
+
+      {:ok, node_count} ->
+        Logger.warning(
+          "Trying to set replication_factor #{replication_factor} " <>
+            "in data_center #{data_center} that has #{node_count} nodes.",
+          tag: "invalid_replication_factor",
+          data_center: data_center,
+          replication_factor: replication_factor
+        )
 
         error_message =
-          "replication_factor #{replication_factor} is >= #{actual_node_count} nodes " <>
+          "replication_factor #{replication_factor} is >= #{node_count} nodes " <>
             "in data_center #{data_center}"
 
         {:error, {:invalid_replication, error_message}}
-      end
-    else
+
       :error ->
-        _ =
-          Logger.warning("Cannot retrieve node count for datacenter #{data_center}.",
-            tag: "datacenter_not_found",
-            data_center: data_center
-          )
+        Logger.warning("Cannot retrieve node count for datacenter #{data_center}.",
+          tag: "datacenter_not_found",
+          data_center: data_center
+        )
 
         {:error, :datacenter_not_found}
     end
@@ -403,10 +373,11 @@ defmodule Astarte.DataAccess.Realm do
     end
   end
 
-  defp create_realm_keyspace(conn, realm_name, replication_map_str) do
+  defp create_realm_keyspace(keyspace, replication_map_str) do
+    # TODO: use Ecto migrations
     query = """
     CREATE KEYSPACE
-      #{realm_name}
+      #{keyspace}
     WITH
       replication = #{replication_map_str}
     AND
@@ -418,9 +389,10 @@ defmodule Astarte.DataAccess.Realm do
     end
   end
 
-  defp create_realm_kv_store(conn, realm_name) do
+  defp create_realm_kv_store(keyspace) do
+    # TODO: use Ecto migrations
     query = """
-    CREATE TABLE #{realm_name}.kv_store (
+    CREATE TABLE #{keyspace}.kv_store (
       group varchar,
       key varchar,
       value blob,
@@ -433,9 +405,10 @@ defmodule Astarte.DataAccess.Realm do
     end
   end
 
-  defp create_names_table(conn, realm_name) do
+  defp create_names_table(keyspace) do
+    # TODO: use Ecto migrations
     query = """
-    CREATE TABLE #{realm_name}.names (
+    CREATE TABLE #{keyspace}.names (
       object_name varchar,
       object_type int,
       object_uuid uuid,
@@ -448,9 +421,10 @@ defmodule Astarte.DataAccess.Realm do
     end
   end
 
-  defp create_devices_table(conn, realm_name) do
+  defp create_devices_table(keyspace) do
+    # TODO: use Ecto migrations
     query = """
-    CREATE TABLE #{realm_name}.devices (
+    CREATE TABLE #{keyspace}.devices (
       device_id uuid,
       aliases map<ascii, varchar>,
       introspection map<ascii, int>,
@@ -486,9 +460,10 @@ defmodule Astarte.DataAccess.Realm do
     end
   end
 
-  defp create_endpoints_table(conn, realm_name) do
+  defp create_endpoints_table(keyspace) do
+    # TODO: use Ecto migrations
     query = """
-    CREATE TABLE #{realm_name}.endpoints (
+    CREATE TABLE #{keyspace}.endpoints (
       interface_id uuid,
       endpoint_id uuid,
       interface_name ascii,
@@ -516,9 +491,10 @@ defmodule Astarte.DataAccess.Realm do
     end
   end
 
-  defp create_interfaces_table(conn, realm_name) do
+  defp create_interfaces_table(keyspace) do
+    # TODO: use Ecto migrations
     query = """
-    CREATE TABLE #{realm_name}.interfaces (
+    CREATE TABLE #{keyspace}.interfaces (
       name ascii,
       major_version int,
       minor_version int,
@@ -542,9 +518,10 @@ defmodule Astarte.DataAccess.Realm do
     end
   end
 
-  defp create_individual_properties_table(conn, realm_name) do
+  defp create_individual_properties_table(keyspace) do
+    # TODO: use Ecto migrations
     query = """
-    CREATE TABLE #{realm_name}.individual_properties (
+    CREATE TABLE #{keyspace}.individual_properties (
       device_id uuid,
       interface_id uuid,
       endpoint_id uuid,
@@ -576,9 +553,10 @@ defmodule Astarte.DataAccess.Realm do
     end
   end
 
-  defp create_simple_triggers_table(conn, keyspace_name) do
+  defp create_simple_triggers_table(keyspace) do
+    # TODO: use Ecto migrations
     query = """
-    CREATE TABLE #{keyspace_name}.simple_triggers (
+    CREATE TABLE #{keyspace}.simple_triggers (
       object_id uuid,
       object_type int,
       parent_trigger_id uuid,
@@ -595,9 +573,10 @@ defmodule Astarte.DataAccess.Realm do
     end
   end
 
-  defp create_grouped_devices_table(conn, realm_name) do
+  defp create_grouped_devices_table(keyspace) do
+    # TODO: use Ecto migrations
     query = """
-    CREATE TABLE #{realm_name}.grouped_devices (
+    CREATE TABLE #{keyspace}.grouped_devices (
       group_name varchar,
       insertion_uuid timeuuid,
       device_id uuid,
@@ -612,9 +591,10 @@ defmodule Astarte.DataAccess.Realm do
     end
   end
 
-  defp create_deletion_in_progress_table(conn, realm_name) do
+  defp create_deletion_in_progress_table(keyspace) do
+    # TODO: use Ecto migrations
     query = """
-    CREATE TABLE #{realm_name}.deletion_in_progress (
+    CREATE TABLE #{keyspace}.deletion_in_progress (
       device_id uuid,
       vmq_ack boolean,
       dup_start_ack boolean,
@@ -628,50 +608,26 @@ defmodule Astarte.DataAccess.Realm do
     end
   end
 
-  defp insert_realm_public_key(conn, realm_name, public_key_pem) do
-    query = """
-    INSERT INTO #{realm_name}.kv_store (
-      group,
-      key,
-      value
-    )
-    VALUES (
-      'auth',
-      'jwt_public_key_pem',
-      varcharAsBlob(:public_key_pem)
-    )
-    """
-
-    params = %{
-      public_key_pem: public_key_pem
+  defp insert_realm_public_key(keyspace, public_key_pem) do
+    value = %{
+      group: "auth",
+      key: "jwt_public_key_pem",
+      value: public_key_pem,
+      value_type: :string
     }
 
-    with {:ok, _} <- XandraUtils.execute_query(conn, query, params, consistency: :each_quorum) do
-      :ok
-    end
+    KvStore.insert(value, prefix: keyspace, consistency: :each_quorum)
   end
 
-  defp insert_realm_astarte_schema_version(conn, keyspace_name, realm_schema_version) do
-    query = """
-    INSERT INTO #{keyspace_name}.kv_store (
-      group,
-      key,
-      value
-    )
-    VALUES (
-      'astarte',
-      'schema_version',
-      bigintAsBlob(:realm_schema_version)
-    )
-    """
-
-    params = %{
-      realm_schema_version: realm_schema_version
+  def insert_realm_astarte_schema_version(keyspace, realm_schema_version) do
+    value = %{
+      group: "astarte",
+      key: "schema_version",
+      value: realm_schema_version,
+      value_type: :big_integer
     }
 
-    with {:ok, _} <- XandraUtils.execute_query(conn, query, params, consistency: :each_quorum) do
-      :ok
-    end
+    KvStore.insert(value, prefix: keyspace, consistency: :each_quorum)
   end
 
   defp remove_realm(conn, astarte_keyspace_name, realm_name) do
@@ -691,55 +647,28 @@ defmodule Astarte.DataAccess.Realm do
     end
   end
 
-  defp insert_realm(conn, astarte_keyspace_name, realm_name, device_registration_limit) do
-    query = """
-    INSERT INTO #{astarte_keyspace_name}.realms (
-      realm_name,
-      device_registration_limit
-    )
-    VALUES (
-      :realm_name,
-      :device_registration_limit
-    )
-    """
-
-    params = %{
+  defp insert_realm(astarte_keyspace, realm_name, device_registration_limit) do
+    realm = %Realm{
       realm_name: realm_name,
       device_registration_limit: device_registration_limit
     }
 
-    with {:ok, prepared} <- Xandra.prepare(conn, query),
-         {:ok, %Xandra.Void{}} <-
-           Xandra.execute(conn, prepared, params, consistency: :each_quorum) do
-      :ok
-    end
+    Repo.insert(realm, prefix: astarte_keyspace, consistency: :each_quorum)
   end
 
   # ScyllaDB considers TTL=0 as unset, see
   # https://opensource.docs.scylladb.com/stable/cql/time-to-live.html#notes
-  defp insert_datastream_max_retention(_conn, _keyspace_name, 0), do: :ok
+  defp insert_datastream_max_retention(_keyspace_name, 0), do: :ok
 
-  defp insert_datastream_max_retention(conn, keyspace_name, max_retention) do
-    query = """
-    INSERT INTO #{keyspace_name}.kv_store (
-      group,
-      key,
-      value
-    )
-    VALUES (
-      'realm_config',
-      'datastream_maximum_storage_retention',
-      intAsBlob(:max_retention)
-    )
-    """
-
-    params = %{
-      max_retention: max_retention
+  defp insert_datastream_max_retention(keyspace, max_retention) do
+    value = %{
+      group: "realm_config",
+      key: "datastream_maximum_storage_retention",
+      value: max_retention,
+      value_type: :integer
     }
 
-    with {:ok, _} <- XandraUtils.execute_query(conn, query, params, consistency: :each_quorum) do
-      :ok
-    end
+    KvStore.insert(value, prefix: keyspace, consistency: :each_quorum)
   end
 
   defp do_is_realm_existing?(conn, astarte_keyspace_name, realm_name) do
@@ -885,29 +814,6 @@ defmodule Astarte.DataAccess.Realm do
     else
       :error ->
         {:ok, nil}
-    end
-  end
-
-  defp get_local_datacenter(conn) do
-    query = """
-    SELECT
-      data_center
-    FROM
-      system.local
-    """
-
-    with {:ok, page} <- XandraUtils.retrieve_page(conn, query),
-         {:ok, %{data_center: datacenter}} <- Enum.fetch(page, 0) do
-      {:ok, datacenter}
-    else
-      :error ->
-        _ =
-          Logger.error(
-            "Empty dataset while getting local datacenter, something is really wrong.",
-            tag: "get_local_datacenter_error"
-          )
-
-        {:error, :local_datacenter_not_found}
     end
   end
 end

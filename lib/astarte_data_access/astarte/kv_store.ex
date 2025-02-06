@@ -19,10 +19,68 @@
 defmodule Astarte.DataAccess.Astarte.KvStore do
   use TypedEctoSchema
 
+  alias Astarte.DataAccess.Repo
+
+  import Ecto.Query
+
+  @type value_type :: :binary | :integer | :big_integer | :string
+  @source "kv_store"
+
   @primary_key false
-  typed_schema "kv_store" do
+  typed_schema @source do
     field :group, :string, primary_key: true
     field :key, :string, primary_key: true
     field :value, :binary
+  end
+
+  @doc """
+    Insert a KvStore, allowing type conversion at the database level.
+
+    The Ecto mindset is to finalize the struct on the Elixir side before sending it to \
+    the database. This does not work well with the KvStore, where we need to store many types as \
+    a blob, but don't care about their actual value on the database side.
+
+    By delegating the conversion to the database, we do not need to manually re-implement all the \
+    conversion functions on the elixir side.
+  """
+  @spec insert(
+          %{
+            optional(:value_type) => value_type(),
+            group: String.t(),
+            key: String.t(),
+            value: term()
+          },
+          Keyword.t()
+        ) :: :ok | {:error, Exception.t()}
+  def insert(kv_store_map, opts \\ []) do
+    %{
+      group: group,
+      key: key,
+      value: value
+    } = kv_store_map
+
+    value_type = Map.get(kv_store_map, :value_type, :binary)
+
+    value_expr =
+      case value_type do
+        :binary -> "?"
+        :integer -> "intAsBlob(?)"
+        :big_integer -> "bigintAsBlob(?)"
+        :string -> "varcharAsBlob(?)"
+      end
+
+    {keyspace, opts} = Keyword.pop!(opts, :prefix)
+
+    sql =
+      """
+        INSERT INTO #{keyspace}.#{@source} (group, key, value)
+        VALUES (?, ?, #{value_expr})
+      """
+
+    params = [group, key, value]
+
+    with {:ok, _} <- Repo.query(sql, params, opts) do
+      :ok
+    end
   end
 end
