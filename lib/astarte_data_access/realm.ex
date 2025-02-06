@@ -22,6 +22,7 @@ defmodule Astarte.DataAccess.Realm do
   alias Astarte.DataAccess.Astarte.KvStore
   alias Astarte.DataAccess.Astarte.Realm
   alias Astarte.DataAccess.CSystem
+  alias Astarte.DataAccess.Realms.Device
   alias Astarte.DataAccess.Repo
   alias Astarte.DataAccess.XandraUtils
 
@@ -70,13 +71,19 @@ defmodule Astarte.DataAccess.Realm do
   end
 
   def delete_realm(realm_name) do
-    case XandraUtils.run(realm_name, fn conn, keyspace_name ->
-           astarte_keyspace_name = XandraUtils.build_keyspace_name!("astarte")
-           do_delete_realm(conn, keyspace_name, astarte_keyspace_name, realm_name)
-         end) do
-      :ok ->
-        :ok
+    keyspace = Realm.keyspace_name(realm_name)
+    astarte_keyspace = Realm.keyspace_name("astarte")
 
+    delete_realm_entry =
+      from Realm,
+        where: [realm_name: ^realm_name]
+
+    with :ok <- check_no_connected_devices(keyspace),
+         :ok <- delete_realm_keyspace(keyspace) do
+      Repo.delete_all(delete_realm_entry, prefix: astarte_keyspace, consistency: :each_quorum)
+
+      :ok
+    else
       {:error, reason} ->
         Logger.warning("Cannot delete realm: #{inspect(reason)}.",
           tag: "realm_deletion_failed",
@@ -207,13 +214,6 @@ defmodule Astarte.DataAccess.Realm do
     end
   end
 
-  defp do_delete_realm(conn, keyspace_name, astarte_keyspace_name, realm_name) do
-    with :ok <- verify_realm_deletion_preconditions(conn, keyspace_name),
-         :ok <- execute_realm_deletion(conn, keyspace_name, astarte_keyspace_name, realm_name) do
-      :ok
-    end
-  end
-
   # Replication factor of 1 is always ok
   def check_replication(1), do: :ok
 
@@ -314,61 +314,36 @@ defmodule Astarte.DataAccess.Realm do
 
   defp build_replication_map_str(_invalid_replication), do: {:error, :invalid_replication}
 
-  defp verify_realm_deletion_preconditions(conn, keyspace_name) do
-    with :ok <- check_no_connected_devices(conn, keyspace_name) do
-      :ok
-    else
-      {:error, reason} ->
-        _ =
-          Logger.warning("Realm deletion preconditions are not satisfied: #{inspect(reason)}.",
-            tag: "realm_deletion_preconditions_rejected",
-            realm: keyspace_name
-          )
+  defp check_no_connected_devices(keyspace) do
+    query =
+      from(Device,
+        hints: ["ALLOW FILTERING"],
+        where: [connected: true],
+        limit: 1,
+        select: [:device_id]
+      )
 
-        {:error, reason}
-    end
-  end
+    case Repo.fetch_one(query, prefix: keyspace) do
+      {:error, :not_found} ->
+        :ok
 
-  defp execute_realm_deletion(conn, keyspace_name, astarte_keyspace_name, realm_name) do
-    with :ok <- delete_realm_keyspace(keyspace_name),
-         :ok <- remove_realm(conn, astarte_keyspace_name, realm_name) do
-      :ok
-    end
-  end
+      {:ok, _} ->
+        Logger.warning("Realm #{keyspace} still has connected devices.",
+          tag: "connected_devices_present"
+        )
 
-  defp check_no_connected_devices(conn, keyspace_name) do
-    query = """
-    SELECT
-      COUNT(*)
-    FROM
-      #{keyspace_name}.devices
-    WHERE
-      connected = true
-    LIMIT 1
-    ALLOW FILTERING
-    """
-
-    with {:ok, page} <- XandraUtils.retrieve_page(conn, query, consistency: :one),
-         {:ok, %{count: count}} = Enum.fetch(page, 0),
-         true <- count === 0 do
-      :ok
-    else
-      false ->
-        _ =
-          Logger.warning("Realm #{keyspace_name} still has connected devices.",
-            tag: "connected_devices_present"
-          )
+        Logger.warning(
+          "Realm deletion preconditions are not satisfied: :connected_devices_present.",
+          tag: "realm_deletion_preconditions_rejected",
+          realm: keyspace
+        )
 
         {:error, :connected_devices_present}
     end
   end
 
-  defp delete_realm_keyspace(keyspace_name) do
-    query = """
-    DROP KEYSPACE #{keyspace_name}
-    """
-
-    with {:ok, _} <- CSystem.execute_schema_change(query) do
+  defp delete_realm_keyspace(keyspace) do
+    with {:ok, _} <- CSystem.execute_schema_change("DROP KEYSPACE #{keyspace}") do
       :ok
     end
   end
@@ -628,23 +603,6 @@ defmodule Astarte.DataAccess.Realm do
     }
 
     KvStore.insert(value, prefix: keyspace, consistency: :each_quorum)
-  end
-
-  defp remove_realm(conn, astarte_keyspace_name, realm_name) do
-    query = """
-    DELETE FROM
-      #{astarte_keyspace_name}.realms
-    WHERE
-      realm_name = :realm_name
-    """
-
-    params = %{
-      realm_name: realm_name
-    }
-
-    with {:ok, _} <- XandraUtils.execute_query(conn, query, params, consistency: :each_quorum) do
-      :ok
-    end
   end
 
   defp insert_realm(astarte_keyspace, realm_name, device_registration_limit) do
