@@ -100,19 +100,10 @@ defmodule Astarte.DataAccess.Realm do
   end
 
   def list_realms() do
-    case XandraUtils.run_without_realm_validation("astarte", fn conn, keyspace_name ->
-           do_list_realms(conn, keyspace_name)
-         end) do
-      {:ok, result} ->
-        {:ok, result}
+    astarte_keyspace = Realm.keyspace_name("astarte")
 
-      {:error, reason} ->
-        Logger.warning("Error while listing realms: #{inspect(reason)}.",
-          tag: "get_list_realm"
-        )
-
-        {:error, reason}
-    end
+    query = from r in Realm, prefix: ^astarte_keyspace, select: r.realm_name
+    Repo.all(query, consistency: :quorum)
   end
 
   def get_realm(realm_name) do
@@ -148,20 +139,6 @@ defmodule Astarte.DataAccess.Realm do
         )
 
         {:error, reason}
-    end
-  end
-
-  defp do_list_realms(conn, astarte_keyspace_name) do
-    query = """
-    SELECT
-      realm_name
-    FROM
-      #{astarte_keyspace_name}.realms
-    """
-
-    with {:ok, page} <- XandraUtils.retrieve_page(conn, query, consistency: :quorum),
-         list = Enum.map(page, fn %{realm_name: realm_name} -> realm_name end) do
-      {:ok, list}
     end
   end
 
