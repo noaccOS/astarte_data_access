@@ -89,11 +89,12 @@ defmodule Astarte.DataAccess.Realm do
     end
   end
 
-  def is_realm_existing(realm_name) do
-    case XandraUtils.run_without_realm_validation("astarte", fn conn, keyspace_name ->
-           do_is_realm_existing?(conn, keyspace_name, realm_name)
-         end) do
-      result when is_boolean(result) -> {:ok, result}
+  def exists?(realm_name) do
+    astarte_keyspace = Realm.keyspace_name("astarte")
+
+    case Repo.fetch(Realm, realm_name, prefix: astarte_keyspace, consistency: :quorum) do
+      {:ok, _realm} -> true
+      {:error, :not_found} -> false
     end
   end
 
@@ -215,7 +216,7 @@ defmodule Astarte.DataAccess.Realm do
   # If replication factor is an integer, we're using SimpleStrategy
   # Check that the replication factor is <= the number of nodes in the same datacenter
   def check_replication(replication_factor)
-       when is_integer(replication_factor) and replication_factor > 1 do
+      when is_integer(replication_factor) and replication_factor > 1 do
     local_datacenter =
       from(l in "local", select: l.data_center)
       |> Repo.one!(prefix: "system")
@@ -235,7 +236,7 @@ defmodule Astarte.DataAccess.Realm do
   end
 
   def check_replication(datacenter_replication_factors)
-       when is_map(datacenter_replication_factors) do
+      when is_map(datacenter_replication_factors) do
     node_count_by_datacenter = node_count_by_datacenter()
 
     datacenter_replication_factors
@@ -635,28 +636,6 @@ defmodule Astarte.DataAccess.Realm do
     }
 
     KvStore.insert_with_query(value, prefix: keyspace, consistency: :each_quorum)
-  end
-
-  defp do_is_realm_existing?(conn, astarte_keyspace_name, realm_name) do
-    query = """
-    SELECT
-      COUNT(*)
-    FROM
-      #{astarte_keyspace_name}.realms
-    WHERE
-      realm_name = :realm_name
-    """
-
-    params = %{
-      realm_name: realm_name
-    }
-
-    with {:ok, prepared} <- Xandra.prepare(conn, query),
-         {:ok, page} <-
-           Xandra.execute(conn, prepared, params, consistency: :quorum) do
-      {:ok, %{count: count}} = Enum.fetch(page, 0)
-      not (count === 0)
-    end
   end
 
   defp get_public_key(conn, keyspace_name) do
