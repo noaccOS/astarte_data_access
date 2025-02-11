@@ -83,4 +83,21 @@ defmodule Astarte.DataAccess.Astarte.KvStore do
       :ok
     end
   end
+
+  @spec fetch_value(String.t(), String.t(), value_type(), Keyword.t()) ::
+          {:ok, term()} | {:error, term()}
+  def fetch_value(group, key, value_type \\ :binary, opts \\ []) do
+    value_expr =
+      case value_type do
+        :binary -> dynamic([kv], kv.value)
+        :integer -> dynamic([kv], fragment("blobAsInt(?)", kv.value))
+        :big_integer -> dynamic([kv], fragment("blobAsBigint(?)", kv.value))
+        :string -> dynamic([kv], fragment("blobAsVarChar(?)", kv.value))
+      end
+
+    query = from __MODULE__, select: ^value_expr
+    primary_key = [group: group, key: key]
+
+    Repo.fetch_by(query, primary_key, opts)
+  end
 end
