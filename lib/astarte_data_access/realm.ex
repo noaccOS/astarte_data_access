@@ -24,7 +24,6 @@ defmodule Astarte.DataAccess.Realm do
   alias Astarte.DataAccess.CSystem
   alias Astarte.DataAccess.Realms.Device
   alias Astarte.DataAccess.Repo
-  alias Astarte.DataAccess.XandraUtils
 
   import Ecto.Query
 
@@ -165,19 +164,22 @@ defmodule Astarte.DataAccess.Realm do
   end
 
   def update_public_key(realm_name, new_public_key_pem) do
-    case XandraUtils.run(realm_name, fn conn, keyspace_name ->
-           do_update_public_key(conn, keyspace_name, new_public_key_pem)
-         end) do
-      {:ok, _result} ->
-        :ok
+    keyspace = Realm.keyspace_name(realm_name)
 
-      {:error, reason} ->
-        Logger.warning("Cannot update public key: #{inspect(reason)}.",
-          tag: "realm_updating_public_key",
-          realm: realm_name
-        )
+    value = %{
+      group: "auth",
+      key: "jwt_public_key_pem",
+      value: new_public_key_pem,
+      value_type: :string
+    }
 
-        {:error, reason}
+    with {:error, reason} <- KvStore.insert(value, prefix: keyspace, consistency: :quorum) do
+      Logger.warning("Cannot update public key: #{inspect(reason)}.",
+        tag: "realm_updating_public_key",
+        realm: realm_name
+      )
+
+      {:error, reason}
     end
   end
 
@@ -605,29 +607,6 @@ defmodule Astarte.DataAccess.Realm do
       consistency: :quorum,
       error: :public_key_not_found
     )
-  end
-
-  defp do_update_public_key(conn, keyspace_name, new_public_key) do
-    query = """
-    INSERT INTO #{keyspace_name}.kv_store (
-      group,
-      key,
-      value
-    )
-    VALUES (
-      'auth',
-      'jwt_public_key_pem',
-      varcharAsBlob(:new_public_key)
-    )
-    """
-
-    params = %{
-      new_public_key: new_public_key
-    }
-
-    with {:ok, _} <- XandraUtils.execute_query(conn, query, params, consistency: :quorum) do
-      :ok
-    end
   end
 
   defp get_realm_replication(keyspace) do
