@@ -161,20 +161,10 @@ defmodule Astarte.DataAccess.Realm do
   end
 
   def update_public_key(realm_name, new_public_key_pem) do
-    case XandraUtils.run(realm_name, fn conn, keyspace_name ->
-           do_update_public_key(conn, keyspace_name, new_public_key_pem)
-         end) do
-      {:ok, _result} ->
-        :ok
+    keyspace = Realm.keyspace_name(realm_name)
+    value = %KvStore{group: "auth", key: "jwt_public_key_pem", value: dynamic([_kv], fragment("varcharAsBlob(?)", ^new_public_key_pem))}
 
-      {:error, reason} ->
-        Logger.warning("Cannot update public key: #{inspect(reason)}.",
-          tag: "realm_updating_public_key",
-          realm: realm_name
-        )
-
-        {:error, reason}
-    end
+    KvStore.insert_with_query(value, prefix: keyspace, consistency: :quorum)
   end
 
   # Replication factor of 1 is always ok
