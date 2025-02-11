@@ -107,19 +107,54 @@ defmodule Astarte.DataAccess.Realm do
   end
 
   def get_realm(realm_name) do
-    case XandraUtils.run(realm_name, fn conn, keyspace_name ->
-           astarte_keyspace_name = XandraUtils.build_keyspace_name!("astarte")
-           do_get_realm(conn, keyspace_name, astarte_keyspace_name, realm_name)
-         end) do
-      {:ok, result} ->
-        {:ok, result}
+    keyspace = Realm.keyspace_name(realm_name)
 
+    with {:ok, public_key} <- get_public_key(keyspace),
+         {:ok, replication_map} <- get_realm_replication(keyspace),
+         {:ok, device_registration_limit} <-
+           get_device_registration_limit(realm_name) do
+      max_retention =
+        get_datastream_maximum_storage_retention(keyspace)
+
+      case replication_map do
+        %{
+          class: "org.apache.cassandra.locator.SimpleStrategy",
+          replication_factor: replication_factor_string
+        } ->
+          replication_factor = Integer.parse(replication_factor_string)
+
+          %{
+            realm_name: realm_name,
+            jwt_public_key_pem: public_key,
+            replication_class: "SimpleStrategy",
+            replication_factor: replication_factor,
+            device_registration_limit: device_registration_limit,
+            datastream_maximum_storage_retention: max_retention
+          }
+
+        %{class: "org.apache.cassandra.locator.NetworkTopologyStrategy"} ->
+          datacenter_replication_factors =
+            replication_map
+            |> Map.drop(["class"])
+            |> Map.new(fn {datacenter, replication_factor} ->
+              {datacenter, String.to_integer(replication_factor)}
+            end)
+
+          %{
+            realm_name: realm_name,
+            jwt_public_key_pem: public_key,
+            replication_class: "NetworkTopologyStrategy",
+            datacenter_replication_factors: datacenter_replication_factors,
+            device_registration_limit: device_registration_limit,
+            datastream_maximum_storage_retention: max_retention
+          }
+      end
+    else
       {:error, reason} ->
-        _ =
-          Logger.warning("Error while getting realm: #{inspect(reason)}.",
-            tag: "get_realm_error",
-            realm: realm_name
-          )
+        Logger.warning("Error while getting realm: #{inspect(reason)}.",
+          tag: "get_realm_error",
+          realm: realm_name
+        )
 
         {:error, reason}
     end
@@ -139,52 +174,6 @@ defmodule Astarte.DataAccess.Realm do
         )
 
         {:error, reason}
-    end
-  end
-
-  defp do_get_realm(conn, keyspace_name, astarte_keyspace_name, realm_name) do
-    with {:ok, public_key} <- get_public_key(conn, keyspace_name),
-         {:ok, replication_map} <- get_realm_replication(conn, keyspace_name),
-         {:ok, device_registration_limit} <-
-           get_device_registration_limit(conn, astarte_keyspace_name, realm_name),
-         {:ok, max_retention} <-
-           get_datastream_maximum_storage_retention(conn, keyspace_name) do
-      case replication_map do
-        %{
-          class: "org.apache.cassandra.locator.SimpleStrategy",
-          replication_factor: replication_factor_string
-        } ->
-          {replication_factor, ""} = Integer.parse(replication_factor_string)
-
-          %{
-            realm_name: realm_name,
-            jwt_public_key_pem: public_key,
-            replication_class: "SimpleStrategy",
-            replication_factor: replication_factor,
-            device_registration_limit: device_registration_limit,
-            datastream_maximum_storage_retention: max_retention
-          }
-
-        %{class: "org.apache.cassandra.locator.NetworkTopologyStrategy"} ->
-          datacenter_replication_factors =
-            Enum.reduce(replication_map, %{}, fn
-              {"class", _}, acc ->
-                acc
-
-              {datacenter, replication_factor_string}, acc ->
-                {replication_factor, ""} = Integer.parse(replication_factor_string)
-                Map.put(acc, datacenter, replication_factor)
-            end)
-
-          %{
-            realm_name: realm_name,
-            jwt_public_key_pem: public_key,
-            replication_class: "NetworkTopologyStrategy",
-            datacenter_replication_factors: datacenter_replication_factors,
-            device_registration_limit: device_registration_limit,
-            datastream_maximum_storage_retention: max_retention
-          }
-      end
     end
   end
 
@@ -616,25 +605,11 @@ defmodule Astarte.DataAccess.Realm do
     KvStore.insert_with_query(value, prefix: keyspace, consistency: :each_quorum)
   end
 
-  defp get_public_key(conn, keyspace_name) do
-    query = """
-    SELECT
-      blobAsVarchar(value)
-    FROM
-      #{keyspace_name}.kv_store
-    WHERE
-      group = 'auth'
-    AND
-      key = 'jwt_public_key_pem';
-    """
+  defp get_public_key(keyspace) do
+    query = from kv in KvStore, prefix: ^keyspace, select: fragment("blobAsVarchar(?)", kv.value)
+    pk_clause = [group: "auth", key: "jwt_public_key_pem"]
 
-    with {:ok, page} <- XandraUtils.retrieve_page(conn, query, consistency: :quorum),
-         {:ok, %{"system.blobasvarchar(value)": public_key}} <- Enum.fetch(page, 0) do
-      {:ok, public_key}
-    else
-      :error ->
-        {:error, :public_key_not_found}
-    end
+    Repo.fetch_by(query, pk_clause, consistency: :quorum, error: :public_key_not_found)
   end
 
   defp do_update_public_key(conn, keyspace_name, new_public_key) do
@@ -660,83 +635,45 @@ defmodule Astarte.DataAccess.Realm do
     end
   end
 
-  defp get_realm_replication(conn, keyspace_name) do
-    query = """
-    SELECT
-      replication
-    FROM
-      system_schema.keyspaces
-    WHERE
-      keyspace_name = :keyspace_name
-    """
+  defp get_realm_replication(keyspace) do
+    query =
+      from k in "keyspaces",
+        prefix: "system_schema",
+        select: k.replication
 
-    params = %{
-      keyspace_name: keyspace_name
-    }
+    with {:error, :not_found} <- Repo.fetch_by(query, keyspace_name: keyspace) do
+      Logger.error("Cannot find realm replication.",
+        tag: "realm_replication_not_found",
+        keyspace: keyspace
+      )
 
-    with {:ok, page} <- XandraUtils.retrieve_page(conn, query, params),
-         {:ok, %{replication: replication_map}} <- Enum.fetch(page, 0) do
-      {:ok, replication_map}
-    else
-      :error ->
-        _ =
-          Logger.error("Cannot find realm replication.",
-            tag: "realm_replication_not_found",
-            keyspace: keyspace_name
-          )
-
-        {:error, :realm_replication_not_found}
+      {:error, :realm_replication_not_found}
     end
   end
 
-  defp get_device_registration_limit(conn, astarte_keyspace_name, realm_name) do
-    query = """
-    SELECT
-      device_registration_limit
-    FROM
-      #{astarte_keyspace_name}.realms
-    WHERE
-      realm_name = :realm_name
-    """
+  defp get_device_registration_limit(realm_name) do
+    astarte_keyspace = Realm.keyspace_name("astarte")
 
-    params = %{
-      realm_name: realm_name
-    }
+    query =
+      from r in Realm,
+        prefix: ^astarte_keyspace,
+        select: r.device_registration_limit
 
-    with {:ok, page} <- XandraUtils.retrieve_page(conn, query, params),
-         {:ok, %{device_registration_limit: value}} <- Enum.fetch(page, 0) do
-      {:ok, value}
-    else
-      :error ->
-        # Something really wrong here, but we still cover this
-        _ =
-          Logger.error("Cannot find realm device_registration_limit.",
-            tag: "realm_device_registration_limit_not_found",
-            realm: realm_name
-          )
+    with {:error, :not_found} <- Repo.fetch(query, realm_name) do
+      # Something really wrong here, but we still cover this
+      Logger.error("Cannot find realm device_registration_limit.",
+        tag: "realm_device_registration_limit_not_found",
+        realm: realm_name
+      )
 
-        {:error, :realm_device_registration_limit_not_found}
+      {:error, :realm_device_registration_limit_not_found}
     end
   end
 
-  defp get_datastream_maximum_storage_retention(conn, keyspace_name) do
-    query = """
-    SELECT
-      blobAsInt(value)
-    FROM
-      #{keyspace_name}.kv_store
-    WHERE
-      group = 'realm_config'
-    AND
-      key = 'datastream_maximum_storage_retention'
-    """
+  defp get_datastream_maximum_storage_retention(keyspace) do
+    query = from kv in KvStore, prefix: ^keyspace, select: fragment("blobAsInt(?)", kv.value)
+    pk_clause = [group: "realm_config", key: "datastream_maximum_storage_retention"]
 
-    with {:ok, page} <- XandraUtils.retrieve_page(conn, query),
-         {:ok, %{"system.blobasint(value)": value}} <- Enum.fetch(page, 0) do
-      {:ok, value}
-    else
-      :error ->
-        {:ok, nil}
-    end
+    Repo.get_by(query, pk_clause)
   end
 end
