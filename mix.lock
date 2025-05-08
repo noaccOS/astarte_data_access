@@ -25,5 +25,5 @@
   "telemetry": {:hex, :telemetry, "1.3.0", "fedebbae410d715cf8e7062c96a1ef32ec22e764197f70cda73d82778d61e7a2", [:rebar3], [], "hexpm", "7015fc8919dbe63764f4b4b87a95b7c0996bd539e0d499be6ec9d7f3875b79e6"},
   "typed_ecto_schema": {:hex, :typed_ecto_schema, "0.4.1", "a373ca6f693f4de84cde474a67467a9cb9051a8a7f3f615f1e23dc74b75237fa", [:mix], [{:ecto, "~> 3.5", [hex: :ecto, repo: "hexpm", optional: false]}], "hexpm", "85c6962f79d35bf543dd5659c6adc340fd2480cacc6f25d2cc2933ea6e8fcb3b"},
   "typedstruct": {:hex, :typedstruct, "0.5.3", "d68ae424251a41b81a8d0c485328ab48edbd3858f3565bbdac21b43c056fc9b4", [:make, :mix], [], "hexpm", "b53b8186701417c0b2782bf02a2db5524f879b8488f91d1d83b97d84c2943432"},
-  "xandra": {:hex, :xandra, "0.19.2", "c3aeea02f7fb0fe913ab74c1ec515172e13fd329f340f7d59a64816dd86aa9ca", [:mix], [{:decimal, "~> 1.7 or ~> 2.0", [hex: :decimal, repo: "hexpm", optional: true]}, {:nimble_options, "~> 1.0", [hex: :nimble_options, repo: "hexpm", optional: false]}, {:telemetry, "~> 0.4.3 or ~> 1.0", [hex: :telemetry, repo: "hexpm", optional: false]}], "hexpm", "9e7310e0b5acf262d48ea0f0b1cc0656b62e90a5864d02b976ed856a7eca4db6"},
+  "xandra": {:git, "https://github.com/noaccOS/xandra.git", "4d99b663bfc5898f379b03227f49b833fb74c21e", [branch: "disconnect-error"]},
 }

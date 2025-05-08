@@ -32,6 +32,9 @@ defmodule Astarte.DataAccess do
       {Astarte.DataAccess.Repo, xandra_options}
     ]
 
+    Xandra.Telemetry.attach_debug_handler()
+    Xandra.Telemetry.attach_default_handler()
+
     opts = [strategy: :one_for_one, name: Astarte.DataAccess.Supervisor]
     Supervisor.init(children, opts)
   end

@@ -73,6 +73,7 @@ defmodule Astarte.DataAccess.Mixfile do
     [
       {:exandra, "~> 0.13"},
       {:typed_ecto_schema, "~> 0.4"},
+      {:xandra, github: "noaccOS/xandra", branch: "disconnect-error", override: true},
       {:skogsra, "~> 2.2"},
       {:excoveralls, "~> 0.15", only: :test},
       {:castore, "~> 1.0.0"},
