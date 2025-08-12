@@ -166,11 +166,14 @@ defmodule Astarte.DataAccess.Config do
     type: :atom
 
   defp populate_xandra_ssl_options(options) do
+    default_transport_options = [show_econnreset: true]
+
     if ssl_enabled!() do
       ssl_options = build_ssl_options()
-      Keyword.put(options, :transport_options, ssl_options)
+      transport_options = Keyword.merge(default_transport_options, ssl_options)
+      Keyword.put(options, :transport_options, transport_options)
     else
-      options
+      options |> Keyword.put(:transport_options, default_transport_options)
     end
   end
 
