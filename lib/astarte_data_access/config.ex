@@ -166,7 +166,7 @@ defmodule Astarte.DataAccess.Config do
     type: :atom
 
   defp populate_xandra_ssl_options(options) do
-    default_transport_options = [show_econnreset: true]
+    default_transport_options = [show_econnreset: true, keepalive: true]
 
     if ssl_enabled!() do
       ssl_options = build_ssl_options()
